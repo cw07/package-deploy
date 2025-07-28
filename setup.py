@@ -56,7 +56,7 @@ ext_modules = find_extensions(PACKAGE_NAME)
 
 setup(
     name="package-deploy",
-    version="0.0.0",
+    version="0.0.1",
     author="Chen Wang",
     author_email="",
     description="Package deploy",
