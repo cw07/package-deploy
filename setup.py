@@ -1,4 +1,3 @@
-import os
 from typing import Dict, Any
 from setuptools import setup, find_packages
 from package_deploy.python_build import get_kwargs
