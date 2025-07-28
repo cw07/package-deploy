@@ -1,0 +1,32 @@
+[tool.cibuildwheel]
+# Build only Python 3.11 wheels
+build = ["cp311-*"]
+
+# Skip failed builds and continue with others
+skip = ["failed"]
+
+# Allow empty builds (useful for testing)
+allow-empty = true
+
+# Environment variables
+[tool.cibuildwheel.environment]
+USE_CYTHON = "1"
+
+# Build options
+[tool.cibuildwheel.build-options]
+# Use pip for building
+build-frontend = "pip"
+
+# Platform-specific settings
+[tool.cibuildwheel.linux]
+# Use manylinux2014 for better compatibility
+manylinux-x86_64-image = "manylinux2014"
+manylinux-i686-image = "manylinux2014"
+
+[tool.cibuildwheel.windows]
+# Use Visual Studio 2019 for Windows builds
+visual-studio-version = "2019"
+
+[tool.cibuildwheel.macos]
+# Use the latest macOS image
+macosx-deployment-target = "10.9" 

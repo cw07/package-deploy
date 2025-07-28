@@ -16,6 +16,7 @@ from argparse import ArgumentParser
 from configparser import ConfigParser
 from abc import ABC, abstractmethod, ABCMeta
 from typing import List, Type, Optional, Callable
+import platform
 
 
 _log = logging.getLogger(__name__)
@@ -194,6 +195,11 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         """Whether to compile with cython."""
         return False
 
+    @DeployArgumentProperty
+    def target_platforms(self) -> List[str]:
+        """List of target platforms to build for. Defaults to Windows platform."""
+        return ['win_amd64']
+
     @DeployArgumentProperty(type=str_to_bool)
     def nexus(self) -> bool:
         """Whether to publish to Nexus."""
@@ -274,6 +280,86 @@ class Deploy(ABC, metaclass=DeployMetaClass):
     def is_poetry(self) -> bool:
         pth = Path('poetry.lock')
         return pth.exists()
+
+    def _build_windows_platform_wheel(self, args, deploy_version: str) -> List[str]:
+        """Build wheel for Windows platform using native build tools."""
+        build_command = [x if x != 'python' else args.python_interpreter for x in args.build_command]
+        attempts_remaining: int = 3
+        need_to_build_wheel: bool = True
+        
+        while need_to_build_wheel:
+            attempts_remaining -= 1
+            try:
+                subprocess.check_output(build_command, stderr=subprocess.STDOUT)
+                need_to_build_wheel = False
+            except subprocess.CalledProcessError as e:
+                _log.error(f"Failed to build wheel: {e.output}")
+                if attempts_remaining > 0:
+                    sleep_amount = random.randint(1, 10)
+                    print(f"Attempt {10 - attempts_remaining} failed; retry in {sleep_amount}s...")
+                    time.sleep(sleep_amount)
+                else:
+                    raise
+        
+        # Find the built wheel
+        wheel_files = []
+        for binary in Path('./dist').iterdir():
+            if (
+                    self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name
+                    and deploy_version.replace('-dev', '.dev') in binary.name
+                    and binary.suffix == '.whl'
+            ):
+                wheel_files.append(binary.name)
+        
+        if len(wheel_files) != 1:
+            raise ValueError(f"Unable to determine wheel name: candidates were {wheel_files}")
+        
+        return wheel_files
+
+    def _build_cross_platform_wheels(self, args, deploy_version: str) -> List[str]:
+        """Build wheels for multiple platforms using cibuildwheel."""
+        try:
+            # Check if cibuildwheel is available
+            subprocess.run(['cibuildwheel', '--help'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            _log.error("cibuildwheel not found. Installing...")
+            subprocess.check_output([args.python_interpreter, '-m', 'pip', 'install', 'cibuildwheel'])
+        
+        wheel_files = []
+        
+        # Build for each target platform
+        for platform in args.target_platforms:
+            _log.info(f"Building wheel for platform: {platform}")
+            
+            # Create cibuildwheel command
+            cmd = [
+                'cibuildwheel',
+                '--platform', platform,
+                '--output-dir', './dist',
+                '--only', 'cp311',  # Python 3.11 only
+                '--skip', 'failed',
+                '--allow-empty'
+            ]
+            
+            if args.cython:
+                cmd.extend(['--environment', 'USE_CYTHON=1'])
+            
+            try:
+                subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+                
+                # Find wheels for this platform
+                for binary in Path('./dist').iterdir():
+                    if (binary.suffix == '.whl' and 
+                        (self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name) and
+                        deploy_version.replace('-dev', '.dev') in binary.name and
+                        platform in binary.name):
+                        wheel_files.append(binary.name)
+                        
+            except subprocess.CalledProcessError as e:
+                _log.warning(f"Failed to build wheel for {platform}: {e.output}")
+                continue
+        
+        return wheel_files
 
     def __call__(self, args=None, namespace=None):
         args = self.arg_parser.parse_args(args, namespace)
@@ -366,72 +452,58 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         else:
             os.environ['USE_CYTHON'] = '0'
 
-        _log.info("Building wheel")
-        build_command = [x if x != 'python' else args.python_interpreter for x in args.build_command]
-        attempts_remaining: int = 3
-        need_to_build_wheel: bool = True
-        while need_to_build_wheel:
-            attempts_remaining -= 1
-            try:
-                subprocess.check_output(build_command, stderr=subprocess.STDOUT)
-                need_to_build_wheel = False
-            except subprocess.CalledProcessError as e:
-                _log.error(f"Failed to build wheel: {e.output}")
-                if attempts_remaining > 0:
-                    sleep_amount = random.randint(1, 10)
-                    print(f"Attempt {10 - attempts_remaining} failed; retry in {sleep_amount}s...")
-                    time.sleep(sleep_amount)
-                else:
-                    raise
-        if need_to_build_wheel:
-            raise ValueError("Failed to build wheel")
-
-        # Now look for the output file
-        wheel_files = []
-        for binary in Path('./dist').iterdir():
-            if (
-                    self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name
-                    and deploy_version.replace('-dev', '.dev') in binary.name
-                    and binary.suffix == '.whl'
-            ):
-                wheel_files.append(binary.name)
-        if len(wheel_files) != 1:
-            raise ValueError(
-                f"Unable to determine wheel name: candidates were {wheel_files}"
-            )
-        wheel_file = wheel_files[0]
-        _log.info(f"Built {wheel_file}")
+        # Check if we need cross-platform OR cross-architecture builds
+        needs_cross_build = any(
+            platform.startswith(('linux', 'macos')) or
+            (platform.startswith('win') and platform != 'win_amd64')  # Different Windows arch
+            for platform in args.target_platforms
+        )
+        
+        if needs_cross_build:
+            _log.info(f"Building multi-platform wheels for: {args.target_platforms}")
+            wheel_files = self._build_cross_platform_wheels(args, deploy_version)
+        else:
+            _log.info(f"Building single-platform wheel for: {args.target_platforms[0]}")
+            wheel_files = self._build_windows_platform_wheel(args, deploy_version)
+        
+        if not wheel_files:
+            raise ValueError("No wheels were built successfully")
+        
+        _log.info(f"Built {len(wheel_files)} wheel(s): {wheel_files}")
 
         # 4. copy the wheel to its destination directories
         if args.nas:
-            src = Path(__file__).parent / 'dist' / wheel_file
-            dests = []
-            for dest_dir in args.wheel_dests:
-                dest = dest_dir / wheel_file
-                dests.append(dest)
-                if not os.path.exists(dest):
-                    _log.info(f"{src} -> {dest}")
-                    shutil.copyfile(src, dest)
-                else:
-                    _log.info(f"Ignoring {src} as {dest} already exists")
+            for wheel_file in wheel_files:
+                src = Path(__file__).parent / 'dist' / wheel_file
+                dests = []
+                for dest_dir in args.wheel_dests:
+                    dest = dest_dir / wheel_file
+                    dests.append(dest)
+                    if not os.path.exists(dest):
+                        _log.info(f"{src} -> {dest}")
+                        shutil.copyfile(src, dest)
+                    else:
+                        _log.info(f"Ignoring {src} as {dest} already exists")
 
         # 5 maybe upload to nexus
         if args.nexus:
             _log.info('Deploying to nexus')
-            try:
-                subprocess.check_output(
-                    [
-                        'twine',
-                        'upload',
-                        '--repository',
-                        args.nexus_repo.repo_config_name,
-                        f'dist/{wheel_file}',
-                    ],
-                    stderr=subprocess.STDOUT,
-                )
-            except subprocess.CalledProcessError as e:
-                _log.error(f"Failed to upload to nexus: {e.output}")
-                raise e
+            for wheel_file in wheel_files:
+                try:
+                    _log.info(f'Uploading {wheel_file} to nexus')
+                    subprocess.check_output(
+                        [
+                            'twine',
+                            'upload',
+                            '--repository',
+                            args.nexus_repo.repo_config_name,
+                            f'dist/{wheel_file}',
+                        ],
+                        stderr=subprocess.STDOUT,
+                    )
+                except subprocess.CalledProcessError as e:
+                    _log.error(f"Failed to upload {wheel_file} to nexus: {e.output}")
+                    raise e
         if args.cleanup_build:
             _log.info('Deleting build, dist and egg-info')
             shutil.rmtree('dist', ignore_errors=True)
