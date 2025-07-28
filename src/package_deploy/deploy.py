@@ -372,15 +372,18 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 '--archs', archs,
                 '--output-dir', './dist',
                 '--config-file', 'cibuildwheel.toml',
-                '--skip', 'failed',
                 '--allow-empty'
             ]
             
-            if args.cython:
-                cmd.extend(['--environment', 'USE_CYTHON=1'])
-            
             try:
-                subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+                # Set environment variables for the subprocess
+                env = os.environ.copy()
+                if args.cython:
+                    env['USE_CYTHON'] = '1'
+                else:
+                    env['USE_CYTHON'] = '0'
+                
+                subprocess.check_output(cmd, stderr=subprocess.STDOUT, env=env)
                 
                 # Find wheels for this platform
                 for binary in Path('./dist').iterdir():
