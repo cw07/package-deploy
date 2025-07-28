@@ -73,7 +73,7 @@ with open("requirements.txt") as f:
 
 setup_kwargs: Dict[str, Any] = dict(
     name="package-deploy",
-    version="version="version="0.0.8""",
+    version="version="version="0.1.0""",
     author="Chen Wang",
     author_email="",
     description="Package deploy",
