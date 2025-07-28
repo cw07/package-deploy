@@ -2,11 +2,29 @@ import os
 from typing import Dict, Any
 from setuptools.dist import Distribution
 from setuptools import setup, Extension, find_packages
+from setuptools.command.build_py import build_py as _build_py
 
 
 PACKAGE_NAME = "package_deploy"
 SRC_DIR = "src"
 USE_CYTHON = os.environ.get('USE_CYTHON') == '1'
+
+
+class build_py(_build_py):
+    """
+    Custom build_py command to exclude modules that are compiled by Cython.
+    """
+    def find_package_modules(self, package, package_dir):
+        modules = super().find_package_modules(package, package_dir)
+        if USE_CYTHON and self.distribution.ext_modules:
+            # Get the list of compiled module names
+            compiled_modules = {ext.name for ext in self.distribution.ext_modules}
+            # Filter out the modules that are compiled
+            modules = [
+                (pkg, mod, file) for (pkg, mod, file) in modules
+                if f"{pkg}.{mod}" not in compiled_modules
+            ]
+        return modules
 
 
 class BinaryDistribution(Distribution):
@@ -69,6 +87,7 @@ setup_kwargs: Dict[str, Any] = dict(
     packages=find_packages(where=SRC_DIR),
     package_dir={'': SRC_DIR},
     include_package_data=True,
+    cmdclass={'build_py': build_py},
 )
 
 if USE_CYTHON:
