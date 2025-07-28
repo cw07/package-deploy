@@ -64,7 +64,6 @@ def find_extensions(package_dir: str, src_dir: str = "src") -> List[Extension]:
 
 
 def get_kwargs(package_name: str, src_dir: str = "src") -> dict:
-    """Returns kwargs for setup() function for cython builds."""
     from Cython.Build import cythonize
 
     if USE_CYTHON:
