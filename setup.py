@@ -13,7 +13,7 @@ with open("requirements.txt") as f:
 
 setup_kwargs: Dict[str, Any] = dict(
     name="package-deploy",
-    version="0.2.1",
+    version="0.2.2",
     author="Chen Wang",
     author_email="",
     description="Package deploy",
