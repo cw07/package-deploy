@@ -189,6 +189,11 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         return 'dev'
 
     @DeployArgumentProperty(type=str_to_bool)
+    def cython(self) -> bool:
+        """Whether to compile with cython."""
+        return False
+
+    @DeployArgumentProperty(type=str_to_bool)
     def nexus(self) -> bool:
         """Whether to publish to Nexus."""
         return True
@@ -355,6 +360,11 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             raise ValueError("Unable to determine version info")
 
         # 3. build the wheel
+        if args.cython:
+            os.environ['USE_CYTHON'] = '1'
+        else:
+            os.environ['USE_CYTHON'] = '0'
+
         _log.info("Building wheel")
         build_command = [x if x != 'python' else args.python_interpreter for x in args.build_command]
         attempts_remaining: int = 10
