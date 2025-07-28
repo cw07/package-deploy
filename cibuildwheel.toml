@@ -6,11 +6,6 @@ build = ["cp311-*"]
 [tool.cibuildwheel.environment]
 USE_CYTHON = "1"
 
-# Build options
-[tool.cibuildwheel.build-options]
-# Use pip for building
-build-frontend = "pip"
-
 # Platform-specific settings
 [tool.cibuildwheel.linux]
 # Use manylinux2014 for better compatibility
