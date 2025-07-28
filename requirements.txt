@@ -2,3 +2,4 @@ bump2version
 twine
 build
 cython
+cibuildwheel
