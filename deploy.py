@@ -3,7 +3,6 @@ from package_deploy import Deploy
 
 class PKGDeploy(Deploy):
     project_name = 'package-deploy'
-    deploy_type = 'patch'
     cython = True
 
 
