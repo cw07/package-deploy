@@ -371,7 +371,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 '--platform', cibuildwheel_platform,
                 '--archs', archs,
                 '--output-dir', './dist',
-                '--only', 'cp311',  # Python 3.11 only
+                '--config-file', 'cibuildwheel.toml',
                 '--skip', 'failed',
                 '--allow-empty'
             ]
