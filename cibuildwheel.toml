@@ -2,12 +2,6 @@
 # Build only Python 3.11 wheels
 build = ["cp311-*"]
 
-# Skip failed builds and continue with others
-skip = ["failed"]
-
-# Allow empty builds (useful for testing)
-allow-empty = true
-
 # Environment variables
 [tool.cibuildwheel.environment]
 USE_CYTHON = "1"

@@ -372,6 +372,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 '--archs', archs,
                 '--output-dir', './dist',
                 '--config-file', 'cibuildwheel.toml',
+                '--skip', 'failed',
                 '--allow-empty'
             ]
             
