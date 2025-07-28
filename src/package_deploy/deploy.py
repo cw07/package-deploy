@@ -371,8 +371,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 '--platform', cibuildwheel_platform,
                 '--archs', archs,
                 '--output-dir', './dist',
-                '--config-file', 'cibuildwheel.toml',
-                '--allow-empty'
+                '--config-file', 'cibuildwheel.toml'
             ]
             
             try:
