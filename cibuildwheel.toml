@@ -2,20 +2,6 @@
 # Build only Python 3.11 wheels
 build = ["cp311-*"]
 
-# Platform-specific settings
-[tool.cibuildwheel.linux]
-# Use manylinux2014 for better compatibility
-manylinux-x86_64-image = "manylinux2014"
-manylinux-i686-image = "manylinux2014"
-
-[tool.cibuildwheel.windows]
-# Use Visual Studio 2019 for Windows builds
-visual-studio-version = "2019"
-
-[tool.cibuildwheel.macos]
-# Use the latest macOS image
-macosx-deployment-target = "10.9"
-
 # Skip failed builds and continue with others
 skip = ["failed"]
 
