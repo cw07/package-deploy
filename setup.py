@@ -1,6 +1,7 @@
 import os
 from setuptools import setup, Extension, find_packages
 from setuptools.dist import Distribution
+from typing import Dict, Any
 
 
 PACKAGE_NAME = "package_deploy"
@@ -52,7 +53,7 @@ def find_extensions(package_dir: str) -> list[Extension]:
 with open("requirements.txt") as f:
     install_requires = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
-setup_kwargs = dict(
+setup_kwargs: Dict[str, Any] = dict(
     name="package-deploy",
     version="0.0.1",
     author="Chen Wang",
