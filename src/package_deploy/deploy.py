@@ -438,6 +438,10 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             shutil.rmtree(f'src/{args.project_name}.egg-info', ignore_errors=True)
             egg_info_name = args.project_name.replace('-', '_')
             shutil.rmtree(f'src/{egg_info_name}.egg-info', ignore_errors=True)
+            try:
+                os.remove('src/package_deploy/deploy.c')
+            except FileNotFoundError:
+                pass
 
         # 6 push to GitHub
         if args.git_push:
