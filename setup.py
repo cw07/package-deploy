@@ -1,5 +1,4 @@
 import os
-from Cython.Build import cythonize
 from setuptools import setup, Extension, find_packages
 from setuptools.dist import Distribution
 
@@ -7,6 +6,7 @@ from setuptools.dist import Distribution
 PACKAGE_NAME = "package_deploy"
 SRC_DIR = "src"
 
+USE_CYTHON = os.environ.get('USE_CYTHON') == '1'
 
 class BinaryDistribution(Distribution):
     """
@@ -52,9 +52,7 @@ def find_extensions(package_dir: str) -> list[Extension]:
 with open("requirements.txt") as f:
     install_requires = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
-ext_modules = find_extensions(PACKAGE_NAME)
-
-setup(
+setup_kwargs = dict(
     name="package-deploy",
     version="0.0.1",
     author="Chen Wang",
@@ -67,29 +65,23 @@ setup(
     entry_points={
         'console_scripts': []
     },
-
-    # --- Build Configuration ---
-
-    # Find packages (like your package_deploy/__init__.py)
     packages=find_packages(where=SRC_DIR),
     package_dir={'': SRC_DIR},
-
-    # This is the magic part: it tells setuptools to use Cython
-    ext_modules=cythonize(
-        ext_modules,
-        compiler_directives={'language_level': "3"},  # Use Python 3 syntax
-        exclude=["*/__init__.py"]  # Be explicit about excluding __init__ files
-    ),
-
-    # This ensures the wheel is correctly tagged as a binary distribution
-    distclass=BinaryDistribution,
-
-    # Add Cython as a build-time dependency
-    setup_requires=['cython>=0.29'],
-
-    # This ensures non-python files defined in MANIFEST.in are included
     include_package_data=True,
-
-    # C-extensions should not be zipped
-    zip_safe=False,
 )
+
+if USE_CYTHON:
+    from Cython.Build import cythonize
+    setup_kwargs.update(
+        ext_modules=cythonize(
+            find_extensions(PACKAGE_NAME),
+            compiler_directives={'language_level': "3"},
+            exclude=["*/__init__.py"]
+        ),
+        distclass=BinaryDistribution,
+        setup_requires=['cython>=0.29'],
+    )
+
+setup_kwargs['zip_safe'] = False
+
+setup(**setup_kwargs)
