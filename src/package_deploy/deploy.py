@@ -8,7 +8,6 @@ import shutil
 import logging
 import argparse
 import subprocess
-import bumpversion.cli
 from enum import Enum
 from pathlib import Path
 from functools import partial
@@ -316,8 +315,8 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         
         return wheel_files
 
-    def _build_cross_platform_wheels(self, args, deploy_version: str) -> List[str]:
-        """Build wheels for multiple platforms using cibuildwheel."""
+    def _build_cross_platform_wheels_for_platforms(self, args, deploy_version: str, platforms: List[str]) -> List[str]:
+        """Build wheels for specific platforms using cibuildwheel."""
         try:
             # Check if cibuildwheel is available
             subprocess.run(['cibuildwheel', '--help'], capture_output=True, check=True)
@@ -327,8 +326,8 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         
         wheel_files = []
         
-        # Build for each target platform
-        for platform in args.target_platforms:
+        # Build for each specified platform
+        for platform in platforms:
             _log.info(f"Building wheel for platform: {platform}")
             
             # Convert platform names to cibuildwheel format
@@ -438,6 +437,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 new_version_command = ['--new-version', new_version]
 
             _log.info(f"Bumping {args.deploy_type} version")
+            import bumpversion.cli
             b2v = bumpversion.cli.main([args.deploy_type, "--verbose"] + new_version_command)
             _log.info(b2v)
 
@@ -496,19 +496,23 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         else:
             os.environ['USE_CYTHON'] = '0'
 
-        # Check if we need cross-platform OR cross-architecture builds
-        needs_cross_build = any(
-            platform.startswith(('linux', 'macos')) or
-            (platform.startswith('win') and platform != 'win_amd64')  # Different Windows arch
-            for platform in args.target_platforms
-        )
+        # Separate Windows AMD64 from other platforms
+        windows_amd64_platforms = [p for p in args.target_platforms if p == 'win_amd64']
+        other_platforms = [p for p in args.target_platforms if p != 'win_amd64']
         
-        if needs_cross_build:
-            _log.info(f"Building multi-platform wheels for: {args.target_platforms}")
-            wheel_files = self._build_cross_platform_wheels(args, deploy_version)
-        else:
-            _log.info(f"Building single-platform wheel for: {args.target_platforms[0]}")
-            wheel_files = self._build_windows_platform_wheel(args, deploy_version)
+        wheel_files = []
+        
+        # Build Windows AMD64 wheels using native build (faster)
+        if windows_amd64_platforms:
+            _log.info(f"Building Windows AMD64 wheels natively for: {windows_amd64_platforms}")
+            windows_wheels = self._build_windows_platform_wheel(args, deploy_version)
+            wheel_files.extend(windows_wheels)
+        
+        # Build other platforms using cibuildwheel
+        if other_platforms:
+            _log.info(f"Building cross-platform wheels for: {other_platforms}")
+            other_wheels = self._build_cross_platform_wheels_for_platforms(args, deploy_version, other_platforms)
+            wheel_files.extend(other_wheels)
         
         if not wheel_files:
             raise ValueError("No wheels were built successfully")
