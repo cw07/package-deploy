@@ -331,10 +331,45 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         for platform in args.target_platforms:
             _log.info(f"Building wheel for platform: {platform}")
             
+            # Convert platform names to cibuildwheel format
+            if platform.startswith('win'):
+                cibuildwheel_platform = 'windows'
+                if platform == 'win_amd64':
+                    archs = 'x86_64'
+                elif platform == 'win_arm64':
+                    archs = 'ARM64'
+                else:
+                    _log.warning(f"Unknown Windows platform: {platform}, skipping")
+                    continue
+            elif platform.startswith('linux'):
+                cibuildwheel_platform = 'linux'
+                if platform == 'linux_x86_64':
+                    archs = 'x86_64'
+                elif platform == 'linux_i686':
+                    archs = 'i686'
+                elif platform == 'linux_aarch64':
+                    archs = 'aarch64'
+                else:
+                    _log.warning(f"Unknown Linux platform: {platform}, skipping")
+                    continue
+            elif platform.startswith('macos'):
+                cibuildwheel_platform = 'macos'
+                if platform == 'macosx_x86_64':
+                    archs = 'x86_64'
+                elif platform == 'macosx_arm64':
+                    archs = 'arm64'
+                else:
+                    _log.warning(f"Unknown macOS platform: {platform}, skipping")
+                    continue
+            else:
+                _log.warning(f"Unknown platform: {platform}, skipping")
+                continue
+            
             # Create cibuildwheel command
             cmd = [
                 'cibuildwheel',
-                '--platform', platform,
+                '--platform', cibuildwheel_platform,
+                '--archs', archs,
                 '--output-dir', './dist',
                 '--only', 'cp311',  # Python 3.11 only
                 '--skip', 'failed',
