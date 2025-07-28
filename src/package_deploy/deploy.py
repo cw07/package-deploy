@@ -367,7 +367,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
 
         _log.info("Building wheel")
         build_command = [x if x != 'python' else args.python_interpreter for x in args.build_command]
-        attempts_remaining: int = 10
+        attempts_remaining: int = 3
         need_to_build_wheel: bool = True
         while need_to_build_wheel:
             attempts_remaining -= 1
