@@ -1,5 +1,6 @@
 from package_deploy import Deploy
 
+
 class PKGDeploy(Deploy):
     project_name = 'package-deploy'
     cython = True

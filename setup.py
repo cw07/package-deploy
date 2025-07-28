@@ -1,13 +1,13 @@
 import os
-from setuptools import setup, Extension, find_packages
-from setuptools.dist import Distribution
 from typing import Dict, Any
+from setuptools.dist import Distribution
+from setuptools import setup, Extension, find_packages
 
 
 PACKAGE_NAME = "package_deploy"
 SRC_DIR = "src"
-
 USE_CYTHON = os.environ.get('USE_CYTHON') == '1'
+
 
 class BinaryDistribution(Distribution):
     """
