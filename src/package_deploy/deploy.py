@@ -335,7 +335,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             if platform.startswith('win'):
                 cibuildwheel_platform = 'windows'
                 if platform == 'win_amd64':
-                    archs = 'x86_64'
+                    archs = 'AMD64'
                 elif platform == 'win_arm64':
                     archs = 'ARM64'
                 else:
@@ -383,6 +383,13 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                     env['USE_CYTHON'] = '0'
                 
                 subprocess.check_output(cmd, stderr=subprocess.STDOUT, env=env)
+            except subprocess.CalledProcessError as e:
+                if "docker" in str(e.output).lower() and "not working" in str(e.output).lower():
+                    _log.error(f"Docker is not running or not available for {platform}. Please start Docker Desktop and try again.")
+                    _log.error("For Windows-only builds, you can use the native build method instead.")
+                else:
+                    _log.error(f"Failed to build wheel for {platform}: {e.output}")
+                continue
                 
                 # Find wheels for this platform
                 for binary in Path('./dist').iterdir():
