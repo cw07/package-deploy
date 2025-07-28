@@ -4,7 +4,6 @@ from setuptools import Extension
 from setuptools.dist import Distribution
 from setuptools.command.build_py import build_py as _build_py
 
-# This is needed for the conditional logic in build_py
 USE_CYTHON = os.environ.get('USE_CYTHON') == '1'
 
 
