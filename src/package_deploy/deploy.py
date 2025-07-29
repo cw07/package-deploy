@@ -15,6 +15,7 @@ from argparse import ArgumentParser
 from configparser import ConfigParser
 from abc import ABC, abstractmethod, ABCMeta
 from typing import List, Type, Optional, Callable
+import platform
 
 
 _log = logging.getLogger(__name__)
@@ -442,10 +443,10 @@ class Deploy(ABC, metaclass=DeployMetaClass):
 
         # we just use "minor" below, because we don't actually care what we're trying to bump: all we are after
         # is the current version
-        bump2version_command = [sys.executable, '-m', 'bump2version']
+        bump2version_command = 'bump2version.exe' if os.name == 'nt' else 'bump2version'
         try:
             b2v = subprocess.check_output(
-                bump2version_command + ['--dry-run', '--list', args.deploy_type]
+                [bump2version_command, '--dry-run', '--list', args.deploy_type]
             )
             b2v = b2v.decode('UTF-8')
             parts = b2v.splitlines(keepends=False)
@@ -468,12 +469,12 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 and args.bumpver
         ):
             _log.info(f"Bumping release version")
-            b2v = subprocess.check_output(bump2version_command + ['release'])
+            b2v = subprocess.check_output([bump2version_command, 'release'])
             b2v = b2v.decode('UTF-8')
             _log.info(b2v)
 
             b2v = subprocess.check_output(
-                bump2version_command + ['--dry-run', '--list', args.deploy_type]
+                [bump2version_command, '--dry-run', '--list', args.deploy_type]
             )
             b2v = b2v.decode('UTF-8')
             parts = b2v.splitlines(keepends=False)
