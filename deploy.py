@@ -7,9 +7,6 @@ from package_deploy import Deploy
 
 class PKGDeploy(Deploy):
     project_name = 'package-deploy'
-    cython = True
-    target_platforms = ['linux_x86_64']  # Build for Windows and Linux
-
 
 if __name__ == '__main__':
     deploy_obj = PKGDeploy()
