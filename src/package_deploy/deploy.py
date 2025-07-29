@@ -436,8 +436,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 new_version_command = ['--new-version', new_version]
 
             _log.info(f"Bumping {args.deploy_type} version")
-            import bump2version.cli
-            b2v = bump2version.cli.main([args.deploy_type, "--verbose"] + new_version_command)
+            subprocess.check_call([sys.executable, '-m', 'bump2version', args.deploy_type, '--verbose'] + new_version_command)
             _log.info(b2v)
 
         # we just use "minor" below, because we don't actually care what we're trying to bump: all we are after
