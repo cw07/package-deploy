@@ -546,6 +546,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                             '--repository',
                             args.nexus_repo.repo_config_name,
                             f'dist/{wheel_file}',
+                            '--disable-progress-bar',
                         ],
                         stderr=subprocess.STDOUT,
                     )
