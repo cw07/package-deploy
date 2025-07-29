@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
+
 from typing import Dict, Any
 from setuptools import setup, find_packages
 from package_deploy.python_build import get_kwargs
