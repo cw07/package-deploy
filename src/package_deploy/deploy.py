@@ -15,7 +15,6 @@ from argparse import ArgumentParser
 from configparser import ConfigParser
 from abc import ABC, abstractmethod, ABCMeta
 from typing import List, Type, Optional, Callable
-import platform
 
 
 _log = logging.getLogger(__name__)
@@ -443,7 +442,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             b2v = bumpversion.cli.main([args.deploy_type, "--verbose"] + new_version_command)
             _log.info(b2v)
 
-        # we just use "minor" below, because we don't actually care what we're trying to bump: all we are after
+        # we just use "minor" below, because we don't care what we're trying to bump: all we are after
         # is the current version
         bump2version_command = 'bump2version.exe' if os.name == 'nt' else 'bump2version'
         try:
