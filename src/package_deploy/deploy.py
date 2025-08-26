@@ -34,18 +34,17 @@ def str_to_bool(value):
 
 class NexusRepo(str, Enum):
     trading = 'trading'
+    pypi = 'pypi'
 
     @property
     def repo_url(self) -> str:
-        raise NotImplementedError(""
-                                  ""
-                                  ""
-                                  )
+        raise NotImplementedError()
 
     @property
     def repo_config_name(self) -> str:
         return {
             NexusRepo.trading: 'trading',
+            NexusRepo.pypi: 'pypi'
         }[self]
 
 
