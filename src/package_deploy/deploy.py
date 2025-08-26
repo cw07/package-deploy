@@ -244,6 +244,8 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         """What commands to use to build the wheel."""
         if self.is_poetry:
             return ['poetry', 'build']
+        elif Path('pyproject.toml').exists():
+            return ['python', '-m', 'build', '--wheel']
         elif Path('setup.py').exists():
             return ['python', 'setup.py', 'bdist_wheel']
         else:
@@ -266,8 +268,9 @@ class Deploy(ABC, metaclass=DeployMetaClass):
     @property
     def config_file(self) -> Path:
         paths = [
-            Path('.bumpversion.cfg'),
+            Path('pyproject.toml'),
             Path('setup.cfg'),
+            Path('.bumpversion.cfg')
         ]
         for pth in paths:
             if pth.exists():
