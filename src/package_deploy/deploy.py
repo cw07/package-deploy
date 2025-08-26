@@ -581,8 +581,8 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             for file_path in c_files:
                 try:
                     os.remove(file_path)
-                except Exception as e:
-                    pass
+                except (OSError, FileNotFoundError) as e:
+                    _log.warning(f"Failed to remove C file {file_path}: {e}")
 
         # 6 push to GitHub
         if args.git_push:
