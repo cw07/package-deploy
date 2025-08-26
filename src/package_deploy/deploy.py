@@ -243,8 +243,6 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         """What commands to use to build the wheel."""
         if self.is_poetry:
             return ['poetry', 'build']
-        elif Path('pyproject.toml').exists():
-            return ['python', '-m', 'build', '--wheel']
         elif Path('setup.py').exists():
             return ['python', 'setup.py', 'bdist_wheel']
         else:
