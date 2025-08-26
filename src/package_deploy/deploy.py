@@ -37,7 +37,10 @@ class NexusRepo(str, Enum):
 
     @property
     def repo_url(self) -> str:
-        raise NotImplementedError()
+        return {
+            NexusRepo.trading: 'http://8.222.211.138:8081/repository/trading/',
+            NexusRepo.pypi: 'https://upload.pypi.org/legacy/'
+        }[self]
 
     @property
     def repo_config_name(self) -> str:
@@ -100,23 +103,25 @@ class DeployArgumentProperty:
         return self._option_string_short or f'-{self._name[0]}'
 
     def add_argument(self, arg_parser: ArgumentParser, instance='Deploy'):
-        kwargs = {}
+        kwargs = {
+            'default': getattr(instance, self._name),
+            'type': self.type
+        }
         if self.choices:
             kwargs['choices'] = self.choices
+        if self.action:
             kwargs['action'] = self.action
 
         try:
             arg_parser.add_argument(
                 self.option_string_short,
-                  self.option_string_long,
-                  default=getattr(instance, self._name),
-                  type=self.type
+                self.option_string_long,
+                **kwargs
             )
         except argparse.ArgumentError:
             arg_parser.add_argument(
                 self.option_string_long,
-                  default=getattr(instance, self._name),
-                  type=self.type
+                **kwargs
             )
 
 
@@ -211,12 +216,16 @@ class Deploy(ABC, metaclass=DeployMetaClass):
     @DeployArgumentProperty
     def prod_branch_name(self) -> str:
         """Name of the prod branch."""
-        gs = subprocess.check_output(['git', 'branch'])
-        branches = [
-            x_str.replace('* ', '').strip()
-            for x_str in gs.decode().split('\n')
-        ]
-        return 'main' if 'main' in branches else 'master'
+        try:
+            gs = subprocess.check_output(['git', 'branch'])
+            branches = [
+                x_str.replace('* ', '').strip()
+                for x_str in gs.decode().split('\n')
+            ]
+            return 'main' if 'main' in branches else 'master'
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            _log.warning(f"Failed to get git branches: {e}. Defaulting to 'main'.")
+            return 'main'
 
     @DeployArgumentProperty(type=str_to_bool)
     def bumpver(self) -> bool:
@@ -225,8 +234,12 @@ class Deploy(ABC, metaclass=DeployMetaClass):
 
     @DeployArgumentProperty
     def git_branch(self) -> str:
-        git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
-        return git_branch.decode().replace('\n', '')
+        try:
+            git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+            return git_branch.decode().replace('\n', '')
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            _log.warning(f"Failed to get current git branch: {e}. Defaulting to 'main'.")
+            return 'main'
 
     @DeployArgumentProperty
     def git_push(self) -> bool:
@@ -261,6 +274,11 @@ class Deploy(ABC, metaclass=DeployMetaClass):
     @DeployArgumentProperty(type=str)
     def python_interpreter(self) -> str:
         return sys.executable
+
+    @DeployArgumentProperty
+    def wheel_dests(self) -> List[Path]:
+        """List of destination directories for wheel files when using NAS deployment."""
+        return []
 
     @property
     def config_file(self) -> Path:
@@ -303,7 +321,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         wheel_files = []
         for binary in Path('./dist').iterdir():
             if (
-                    self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name
+                    (self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name)
                     and deploy_version.replace('-dev', '.dev') in binary.name
                     and binary.suffix == '.whl'
             ):
@@ -381,13 +399,6 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                     env['USE_CYTHON'] = '0'
                 
                 subprocess.check_output(cmd, stderr=subprocess.STDOUT, env=env)
-            except subprocess.CalledProcessError as e:
-                if "docker" in str(e.output).lower() and "not working" in str(e.output).lower():
-                    _log.error(f"Docker is not running or not available for {platform}. Please start Docker Desktop and try again.")
-                    _log.error("For Windows-only builds, you can use the native build method instead.")
-                else:
-                    _log.error(f"Failed to build wheel for {platform}: {e.output}")
-                continue
                 
                 # Find wheels for this platform
                 for binary in Path('./dist').iterdir():
@@ -398,7 +409,11 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                         wheel_files.append(binary.name)
                         
             except subprocess.CalledProcessError as e:
-                _log.warning(f"Failed to build wheel for {platform}: {e.output}")
+                if "docker" in str(e.output).lower() and "not working" in str(e.output).lower():
+                    _log.error(f"Docker is not running or not available for {platform}. Please start Docker Desktop and try again.")
+                    _log.error("For Windows-only builds, you can use the native build method instead.")
+                else:
+                    _log.error(f"Failed to build wheel for {platform}: {e.output}")
                 continue
         
         return wheel_files
@@ -426,7 +441,8 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 cfg.read(self.config_file)
                 current_version = cfg['bumpversion']['current_version']
                 parse = cfg['bumpversion']['parse']
-                old_commit = re.search(parse, current_version).group('commit')
+                match = re.search(parse, current_version)
+                old_commit = match.group('commit') if match else None
 
                 if old_commit:
                     # if old commit exists we replace it
@@ -457,7 +473,8 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             if len(current_versions) != 1:
                 raise ValueError(f"Ambiguous versions found: {current_versions}")
             deploy_version = current_versions[0]
-        except:
+        except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
+            _log.warning(f"Failed to get version from bump2version: {e}. Reading from config file.")
             cfg = ConfigParser()
             cfg.read(self.config_file)
             deploy_version = cfg['bumpversion']['current_version']
@@ -521,7 +538,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         # 4. copy the wheel to its destination directories
         if args.nas:
             for wheel_file in wheel_files:
-                src = Path(__file__).parent / 'dist' / wheel_file
+                src = Path('./dist') / wheel_file
                 dests = []
                 for dest_dir in args.wheel_dests:
                     dest = dest_dir / wheel_file
