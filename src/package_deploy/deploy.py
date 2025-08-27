@@ -14,7 +14,20 @@ from functools import partial
 from argparse import ArgumentParser
 from configparser import ConfigParser
 from abc import ABC, abstractmethod, ABCMeta
-from typing import List, Type, Optional, Callable
+from typing import List, Type, Optional, Callable, Dict, Tuple
+
+from .config import (
+    BUILD_ATTEMPTS, BUILD_RETRY_DELAY_RANGE, SUPPORTED_PLATFORMS,
+    CONFIG_FILE_PATTERNS, POETRY_LOCK_FILE, BUILD_DIRS, EGG_INFO_PATTERNS,
+    DEFAULT_BRANCHES, DEFAULT_DEV_BRANCH, VERSION_BUMP_TYPES,
+    CYTHON_ENV_VAR, CYTHON_ENABLED, CYTHON_DISABLED,
+    BUMP2VERSION_COMMANDS, SUBPROCESS_STDERR, SUBPROCESS_DISABLE_PROGRESS
+)
+from .utils import (
+    run_command, get_git_info, check_git_status, find_wheel_files,
+    is_supported_platform, get_platform_info, is_windows_amd64,
+    set_cython_environment, get_bump2version_command
+)
 
 
 _log = logging.getLogger(__name__)
@@ -53,7 +66,7 @@ class NexusRepo(str, Enum):
 class DeployArgumentProperty:
     """
     DeployArgumentProperty works in a very similar way to the in built property decorator.
-    Any function decorated by DeployArgumentProperty will have the following behaviour:
+    Any function decorated by DeployArgumentProperty will have the following behavior:
         1. Can be overridden by a child class variable.
         2. Can be overridden by a child class property.
         3. Will be added to the argument parser with name and short name.
@@ -190,7 +203,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
     @DeployArgumentProperty
     def dev_branch_name(self) -> str:
         """Name of the dev branch."""
-        return 'dev'
+        return DEFAULT_DEV_BRANCH
 
     @DeployArgumentProperty(type=str_to_bool)
     def cython(self) -> bool:
@@ -222,10 +235,10 @@ class Deploy(ABC, metaclass=DeployMetaClass):
                 x_str.replace('* ', '').strip()
                 for x_str in gs.decode().split('\n')
             ]
-            return 'main' if 'main' in branches else 'master'
+            return DEFAULT_BRANCHES[0] if DEFAULT_BRANCHES[0] in branches else DEFAULT_BRANCHES[1]
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            _log.warning(f"Failed to get git branches: {e}. Defaulting to 'main'.")
-            return 'main'
+            _log.warning(f"Failed to get git branches: {e}. Defaulting to '{DEFAULT_BRANCHES[0]}'.")
+            return DEFAULT_BRANCHES[0]
 
     @DeployArgumentProperty(type=str_to_bool)
     def bumpver(self) -> bool:
@@ -238,15 +251,15 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
             return git_branch.decode().replace('\n', '')
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            _log.warning(f"Failed to get current git branch: {e}. Defaulting to 'main'.")
-            return 'main'
+            _log.warning(f"Failed to get current git branch: {e}. Defaulting to '{DEFAULT_BRANCHES[0]}'.")
+            return DEFAULT_BRANCHES[0]
 
     @DeployArgumentProperty
     def git_push(self) -> bool:
         """Whether to push to bump commits to git"""
         return True
 
-    @DeployArgumentProperty(choices=['major', 'minor', 'patch', 'build'])
+    @DeployArgumentProperty(choices=VERSION_BUMP_TYPES)
     def deploy_type(self) -> str:
         """What version to bump. As defined in config file."""
         return 'build' if not self.git_branch == self.prod_branch_name else 'patch'
@@ -266,7 +279,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
         """Whether to publish to nas."""
         return False
 
-    @DeployArgumentProperty
+    @DeployArgumentProperty(type=str_to_bool)
     def cleanup_build(self) -> bool:
         """Whether to delete dist and build after script has run."""
         return True
@@ -282,11 +295,7 @@ class Deploy(ABC, metaclass=DeployMetaClass):
 
     @property
     def config_file(self) -> Path:
-        paths = [
-            Path('pyproject.toml'),
-            Path('setup.cfg'),
-            Path('.bumpversion.cfg')
-        ]
+        paths = [Path(pattern) for pattern in CONFIG_FILE_PATTERNS]
         for pth in paths:
             if pth.exists():
                 return pth
@@ -294,171 +303,54 @@ class Deploy(ABC, metaclass=DeployMetaClass):
 
     @property
     def is_poetry(self) -> bool:
-        pth = Path('poetry.lock')
+        pth = Path(POETRY_LOCK_FILE)
         return pth.exists()
 
-    def _build_windows_platform_wheel(self, args, deploy_version: str) -> List[str]:
-        """Build wheel for Windows platform using native build tools."""
-        build_command = [x if x != 'python' else args.python_interpreter for x in args.build_command]
-        attempts_remaining: int = 3
-        need_to_build_wheel: bool = True
-        
-        while need_to_build_wheel:
-            attempts_remaining -= 1
-            try:
-                subprocess.check_output(build_command, stderr=subprocess.STDOUT)
-                need_to_build_wheel = False
-            except subprocess.CalledProcessError as e:
-                _log.error(f"Failed to build wheel: {e.output}")
-                if attempts_remaining > 0:
-                    sleep_amount = random.randint(1, 10)
-                    print(f"Attempt {10 - attempts_remaining} failed; retry in {sleep_amount}s...")
-                    time.sleep(sleep_amount)
-                else:
-                    raise
-        
-        # Find the built wheel
-        wheel_files = []
-        for binary in Path('./dist').iterdir():
-            if (
-                    (self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name)
-                    and deploy_version.replace('-dev', '.dev') in binary.name
-                    and binary.suffix == '.whl'
-            ):
-                wheel_files.append(binary.name)
-        
-        if len(wheel_files) != 1:
-            raise ValueError(f"Unable to determine wheel name: candidates were {wheel_files}")
-        
-        return wheel_files
-
-    def _build_cross_platform_wheels_for_platforms(self, args, deploy_version: str, platforms: List[str]) -> List[str]:
-        """Build wheels for specific platforms using cibuildwheel."""
-        try:
-            # Check if cibuildwheel is available
-            subprocess.run(['cibuildwheel', '--help'], capture_output=True, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            _log.error("cibuildwheel not found. Installing...")
-            subprocess.check_output([args.python_interpreter, '-m', 'pip', 'install', 'cibuildwheel'])
-        
-        wheel_files = []
-        
-        # Build for each specified platform
-        for platform in platforms:
-            _log.info(f"Building wheel for platform: {platform}")
-            
-            # Convert platform names to cibuildwheel format
-            if platform.startswith('win'):
-                cibuildwheel_platform = 'windows'
-                if platform == 'win_amd64':
-                    archs = 'AMD64'
-                elif platform == 'win_arm64':
-                    archs = 'ARM64'
-                else:
-                    _log.warning(f"Unknown Windows platform: {platform}, skipping")
-                    continue
-            elif platform.startswith('linux'):
-                cibuildwheel_platform = 'linux'
-                if platform == 'linux_x86_64':
-                    archs = 'x86_64'
-                elif platform == 'linux_i686':
-                    archs = 'i686'
-                elif platform == 'linux_aarch64':
-                    archs = 'aarch64'
-                else:
-                    _log.warning(f"Unknown Linux platform: {platform}, skipping")
-                    continue
-            elif platform.startswith('macos'):
-                cibuildwheel_platform = 'macos'
-                if platform == 'macosx_x86_64':
-                    archs = 'x86_64'
-                elif platform == 'macosx_arm64':
-                    archs = 'arm64'
-                else:
-                    _log.warning(f"Unknown macOS platform: {platform}, skipping")
-                    continue
-            else:
-                _log.warning(f"Unknown platform: {platform}, skipping")
-                continue
-            
-            # Create cibuildwheel command
-            cmd = [
-                'cibuildwheel',
-                '--platform', cibuildwheel_platform,
-                '--archs', archs,
-                '--output-dir', './dist',
-                '--config-file', 'cibuildwheel.toml'
-            ]
-            
-            try:
-                # Set environment variables for the subprocess
-                env = os.environ.copy()
-                if args.cython:
-                    env['USE_CYTHON'] = '1'
-                else:
-                    env['USE_CYTHON'] = '0'
-                
-                subprocess.check_output(cmd, stderr=subprocess.STDOUT, env=env)
-                
-                # Find wheels for this platform
-                for binary in Path('./dist').iterdir():
-                    if (binary.suffix == '.whl' and 
-                        (self.project_name in binary.name or self.project_name.replace('-', '_') in binary.name) and
-                        deploy_version.replace('-dev', '.dev') in binary.name and
-                        platform in binary.name):
-                        wheel_files.append(binary.name)
-                        
-            except subprocess.CalledProcessError as e:
-                if "docker" in str(e.output).lower() and "not working" in str(e.output).lower():
-                    _log.error(f"Docker is not running or not available for {platform}. Please start Docker Desktop and try again.")
-                    _log.error("For Windows-only builds, you can use the native build method instead.")
-                else:
-                    _log.error(f"Failed to build wheel for {platform}: {e.output}")
-                continue
-        
-        return wheel_files
-
-    def __call__(self, args=None, namespace=None):
-        args = self.arg_parser.parse_args(args, namespace)
-        # 1. check for git status (if not clean, abort)
+    def _check_git_status(self) -> None:
+        """Check if git repository is clean."""
         _log.info("Checking git status - we maintain to make sure repo is clean")
-        gs = subprocess.check_output(['git', 'status', '--porcelain'])
-        gs = gs.decode('UTF-8')
-        if gs:
-            raise IOError(f'Repository is NOT clean: \n{gs}')
+        if not check_git_status():
+            raise IOError("Repository is NOT clean: Repository has uncommitted changes")
 
-        git_commit = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'])
-        git_commit = git_commit.decode().replace('\n', '')
+    def _get_git_commit(self) -> str:
+        """Get current git commit hash."""
+        _, commit = get_git_info()
+        return commit
 
-        # 2. Bump versions
-        if args.bumpver:
-            new_version_command = []
-            if (
-                    args.git_branch not in [args.dev_branch_name, args.prod_branch_name]
-                    or args.deploy_type == 'commit'
-            ):
-                cfg = ConfigParser()
-                cfg.read(self.config_file)
-                current_version = cfg['bumpversion']['current_version']
-                parse = cfg['bumpversion']['parse']
-                match = re.search(parse, current_version)
-                old_commit = match.group('commit') if match else None
+    def _bump_version(self, args, git_commit: str) -> None:
+        """Bump version using bumpversion."""
+        if not args.bumpver:
+            return
+            
+        new_version_command = []
+        if (
+                args.git_branch not in [args.dev_branch_name, args.prod_branch_name]
+                or args.deploy_type == 'commit'
+        ):
+            cfg = ConfigParser()
+            cfg.read(self.config_file)
+            current_version = cfg['bumpversion']['current_version']
+            parse = cfg['bumpversion']['parse']
+            match = re.search(parse, current_version)
+            old_commit = match.group('commit') if match else None
 
-                if old_commit:
-                    # if old commit exists we replace it
-                    new_version = current_version.replace(old_commit, f'+{git_commit}')
-                else:
-                    new_version = current_version + f'+{git_commit}'
-                new_version_command = ['--new-version', new_version]
+            if old_commit:
+                # if old commit exists we replace it
+                new_version = current_version.replace(old_commit, f'+{git_commit}')
+            else:
+                new_version = current_version + f'+{git_commit}'
+            new_version_command = ['--new-version', new_version]
 
-            _log.info(f"Bumping {args.deploy_type} version")
-            import bumpversion.cli
-            b2v = bumpversion.cli.main([args.deploy_type, "--verbose"] + new_version_command)
-            _log.info(b2v)
+        _log.info(f"Bumping {args.deploy_type} version")
+        import bumpversion.cli
+        b2v = bumpversion.cli.main([args.deploy_type, "--verbose"] + new_version_command)
+        _log.info(b2v)
 
+    def _get_deploy_version(self, args) -> str:
+        """Get the current deployment version."""
         # we just use "minor" below, because we don't care what we're trying to bump: all we are after
         # is the current version
-        bump2version_command = 'bump2version.exe' if os.name == 'nt' else 'bump2version'
+        bump2version_command = get_bump2version_command()
         try:
             b2v = subprocess.check_output(
                 [bump2version_command, '--dry-run', '--list', args.deploy_type]
@@ -505,16 +397,103 @@ class Deploy(ABC, metaclass=DeployMetaClass):
 
         if not deploy_version:
             raise ValueError("Unable to determine version info")
+            
+        return deploy_version
 
-        # 3. build the wheel
-        if args.cython:
-            os.environ['USE_CYTHON'] = '1'
-        else:
-            os.environ['USE_CYTHON'] = '0'
+    def _build_windows_platform_wheel(self, args, deploy_version: str) -> List[str]:
+        """Build wheel for Windows platform using native build tools."""
+        build_command = [x if x != 'python' else args.python_interpreter for x in args.build_command]
+        attempts_remaining: int = BUILD_ATTEMPTS
+        need_to_build_wheel: bool = True
+        
+        while need_to_build_wheel:
+            attempts_remaining -= 1
+            try:
+                subprocess.check_output(build_command, stderr=subprocess.STDOUT)
+                need_to_build_wheel = False
+            except subprocess.CalledProcessError as e:
+                _log.error(f"Failed to build wheel: {e.output}")
+                if attempts_remaining > 0:
+                    sleep_amount = random.randint(*BUILD_RETRY_DELAY_RANGE)
+                    print(f"Attempt {BUILD_ATTEMPTS - attempts_remaining} failed; retry in {sleep_amount}s...")
+                    time.sleep(sleep_amount)
+                else:
+                    raise
+        
+        # Find the built wheel
+        wheel_files = find_wheel_files(self.project_name, deploy_version)
+        
+        if len(wheel_files) != 1:
+            raise ValueError(f"Unable to determine wheel name: candidates were {wheel_files}")
+        
+        return wheel_files
+
+    def _build_cross_platform_wheels_for_platforms(self, args, deploy_version: str, platforms: List[str]) -> List[str]:
+        """Build wheels for specific platforms using cibuildwheel."""
+        try:
+            # Check if cibuildwheel is available
+            subprocess.run(['cibuildwheel', '--help'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            _log.error("cibuildwheel not found. Installing...")
+            subprocess.check_output([args.python_interpreter, '-m', 'pip', 'install', 'cibuildwheel'])
+        
+        wheel_files = []
+        
+        # Build for each specified platform
+        for platform in platforms:
+            _log.info(f"Building wheel for platform: {platform}")
+            
+            # Get platform info using the utility function
+            platform_info = get_platform_info(platform)
+            if not platform_info:
+                _log.warning(f"Unknown platform: {platform}, skipping")
+                continue
+                
+            cibuildwheel_platform, archs = platform_info
+            
+            # Create cibuildwheel command
+            cmd = [
+                'cibuildwheel',
+                '--platform', cibuildwheel_platform,
+                '--archs', archs,
+                '--output-dir', './dist',
+                '--config-file', 'cibuildwheel.toml'
+            ]
+            
+            try:
+                # Set environment variables for the subprocess
+                env = os.environ.copy()
+                set_cython_environment(args.cython)
+                # Update the environment dict with the new value
+                env[CYTHON_ENV_VAR] = os.environ[CYTHON_ENV_VAR]
+                
+                subprocess.check_output(cmd, stderr=subprocess.STDOUT, env=env)
+                
+                # Find wheels for this platform
+                platform_wheels = find_wheel_files(self.project_name, deploy_version)
+                # Filter by platform
+                for wheel in platform_wheels:
+                    if platform in wheel:
+                        wheel_files.append(wheel)
+                        
+            except subprocess.CalledProcessError as e:
+                if "docker" in str(e.output).lower() and "not working" in str(e.output).lower():
+                    _log.error(f"Docker is not running or not available for {platform}. Please start Docker Desktop and try again.")
+                    _log.error("For Windows-only builds, you can use the native build method instead.")
+                else:
+                    _log.error(f"Failed to build wheel for {platform}: {e.output}")
+                continue
+        
+        return wheel_files
+
+    def _build_wheels(self, args, deploy_version: str) -> List[str]:
+        """Build wheels for all target platforms."""
+        # Set Cython environment variable
+        set_cython_environment(args.cython)
 
         # Separate Windows AMD64 from other platforms
-        windows_amd64_platforms = [p for p in args.target_platforms if p == 'win_amd64']
-        other_platforms = [p for p in args.target_platforms if p != 'win_amd64']
+        windows_amd64_platforms = [p for p in args.target_platforms if is_windows_amd64(p)]
+        other_platforms = [p for p in args.target_platforms if not is_windows_amd64(p)]
         
         wheel_files = []
         
@@ -534,65 +513,114 @@ class Deploy(ABC, metaclass=DeployMetaClass):
             raise ValueError("No wheels were built successfully")
         
         _log.info(f"Built {len(wheel_files)} wheel(s): {wheel_files}")
+        return wheel_files
 
-        # 4. copy the wheel to its destination directories
-        if args.nas:
-            for wheel_file in wheel_files:
-                src = Path('./dist') / wheel_file
-                dests = []
-                for dest_dir in args.wheel_dests:
-                    dest = dest_dir / wheel_file
-                    dests.append(dest)
-                    if not os.path.exists(dest):
-                        _log.info(f"{src} -> {dest}")
-                        shutil.copyfile(src, dest)
-                    else:
-                        _log.info(f"Ignoring {src} as {dest} already exists")
+    def _deploy_to_nas(self, args, wheel_files: List[str]) -> None:
+        """Deploy wheel files to NAS destinations."""
+        if not args.nas:
+            return
+            
+        for wheel_file in wheel_files:
+            src = Path('./dist') / wheel_file
+            for dest_dir in args.wheel_dests:
+                dest = dest_dir / wheel_file
+                if not os.path.exists(dest):
+                    _log.info(f"{src} -> {dest}")
+                    shutil.copyfile(src, dest)
+                else:
+                    _log.info(f"Ignoring {src} as {dest} already exists")
 
-        # 5 maybe upload to nexus
-        if args.nexus:
-            _log.info('Deploying to nexus')
-            for wheel_file in wheel_files:
-                try:
-                    _log.info(f'Uploading {wheel_file} to nexus')
-                    subprocess.check_output(
-                        [
-                            'twine',
-                            'upload',
-                            '--repository',
-                            args.nexus_repo.repo_config_name,
-                            f'dist/{wheel_file}',
-                            '--disable-progress-bar',
-                        ],
-                        stderr=subprocess.STDOUT,
-                    )
-                except subprocess.CalledProcessError as e:
-                    _log.error(f"Failed to upload {wheel_file} to nexus: {e.output}")
-                    raise e
-        if args.cleanup_build:
-            _log.info('Deleting build, dist and egg-info')
-            shutil.rmtree('dist', ignore_errors=True)
-            shutil.rmtree('build', ignore_errors=True)
-            shutil.rmtree(f'src/{args.project_name}.egg-info', ignore_errors=True)
-            egg_info_name = args.project_name.replace('-', '_')
-            shutil.rmtree(f'src/{egg_info_name}.egg-info', ignore_errors=True)
-            directory = 'src/package_deploy'
-            c_files = glob.glob(os.path.join(directory, '*.c'))
-            for file_path in c_files:
-                try:
-                    os.remove(file_path)
-                except (OSError, FileNotFoundError) as e:
-                    _log.warning(f"Failed to remove C file {file_path}: {e}")
-
-        # 6 push to GitHub
-        if args.git_push:
-            _log.info('Pushing to github.')
+    def _deploy_to_nexus(self, args, wheel_files: List[str]) -> None:
+        """Deploy wheel files to Nexus repository."""
+        if not args.nexus:
+            return
+            
+        _log.info('Deploying to nexus')
+        for wheel_file in wheel_files:
             try:
-                subprocess.check_output(['git', 'pull'], stderr=subprocess.STDOUT)
-                subprocess.check_output(['git', 'push', '--tags'], stderr=subprocess.STDOUT)
-                subprocess.check_output(['git', 'push'], stderr=subprocess.STDOUT)
-            except Exception as ex:
-                if isinstance(ex, subprocess.CalledProcessError):
-                    _log.error(ex.output)
-                _log.warning(f'Failed to push bump version commit. Please merge and push manually.')
+                _log.info(f'Uploading {wheel_file} to nexus')
+                subprocess.check_output(
+                    [
+                        'twine',
+                        'upload',
+                        '--repository',
+                        args.nexus_repo.repo_config_name,
+                        f'dist/{wheel_file}',
+                        SUBPROCESS_DISABLE_PROGRESS,
+                    ],
+                    stderr=subprocess.STDOUT,
+                )
+            except subprocess.CalledProcessError as e:
+                _log.error(f"Failed to upload {wheel_file} to nexus: {e.output}")
+                raise e
+
+    def _cleanup_build(self, args) -> None:
+        """Clean up build artifacts."""
+        if not args.cleanup_build:
+            return
+            
+        _log.info('Deleting build, dist and egg-info')
+        for build_dir in BUILD_DIRS:
+            shutil.rmtree(build_dir, ignore_errors=True)
+        
+        # Remove egg-info directories
+        for pattern in EGG_INFO_PATTERNS:
+            egg_info_paths = glob.glob(f'src/{args.project_name}{pattern}')
+            egg_info_name = args.project_name.replace('-', '_')
+            egg_info_paths.extend(glob.glob(f'src/{egg_info_name}{pattern}'))
+            
+            for egg_info_path in egg_info_paths:
+                shutil.rmtree(egg_info_path, ignore_errors=True)
+        
+        # Remove C files
+        directory = 'src/package_deploy'
+        c_files = glob.glob(os.path.join(directory, '*.c'))
+        for file_path in c_files:
+            try:
+                os.remove(file_path)
+            except (OSError, FileNotFoundError) as e:
+                _log.warning(f"Failed to remove C file {file_path}: {e}")
+
+    def _push_to_github(self, args) -> None:
+        """Push changes to GitHub."""
+        if not args.git_push:
+            return
+            
+        _log.info('Pushing to github.')
+        try:
+            subprocess.check_output(['git', 'pull'], stderr=subprocess.STDOUT)
+            subprocess.check_output(['git', 'push', '--tags'], stderr=subprocess.STDOUT)
+            subprocess.check_output(['git', 'push'], stderr=subprocess.STDOUT)
+        except Exception as ex:
+            if isinstance(ex, subprocess.CalledProcessError):
+                _log.error(ex.output)
+            _log.warning(f'Failed to push bump version commit. Please merge and push manually.')
+
+    def __call__(self, args=None, namespace=None):
+        """Main deployment workflow."""
+        args = self.arg_parser.parse_args(args, namespace)
+        
+        # 1. Check git status
+        self._check_git_status()
+        git_commit = self._get_git_commit()
+
+        # 2. Bump versions
+        self._bump_version(args, git_commit)
+        deploy_version = self._get_deploy_version(args)
+
+        # 3. Build wheels
+        wheel_files = self._build_wheels(args, deploy_version)
+
+        # 4. Deploy to NAS
+        self._deploy_to_nas(args, wheel_files)
+
+        # 5. Deploy to Nexus
+        self._deploy_to_nexus(args, wheel_files)
+
+        # 6. Cleanup build artifacts
+        self._cleanup_build(args)
+
+        # 7. Push to GitHub
+        self._push_to_github(args)
+        
         _log.info('Deploy Complete')
